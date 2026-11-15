@@ -7,7 +7,7 @@ use std::{
 use dmm::{Coord, Prefab, PrefabInstanceId};
 
 use crate::{
-    grid::Grid,
+    document::grid::Grid,
     maploader::{Diagnostic, ErrorKind},
 };
 
@@ -16,8 +16,8 @@ mod state;
 #[cfg(test)]
 mod tests;
 mod view;
+pub use compose::ComposeContext;
 use compose::ModuleLayer;
-pub use compose::{ComposeContext, compose};
 pub use state::ModulePreviewState;
 pub use view::MapView;
 use view::OverlayTiles;
@@ -63,6 +63,7 @@ pub struct ModuleVariantPreview {
 pub struct ModuleRootPreview {
     pub key: ModuleRootKey,
     pub coord: Coord,
+    #[cfg(test)]
     pub depth: usize,
     pub marker: Option<Prefab>,
     pub variants: Vec<ModuleVariantPreview>,

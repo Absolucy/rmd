@@ -1,5 +1,4 @@
-use core::{
-    arena::StrArena,
+use base::{
     path::TreePath,
     types::{Identifier, Value},
 };
@@ -9,18 +8,24 @@ use std::{
 };
 
 use dmm::{Coord, Map, Prefab, Size};
-use editor::{
-    BakeProgram, Environment,
-    blame::BlameResult,
-    diff::DiffSource,
-    document::{DocumentId, MapDocument, PrefabInstanceId},
-    git::{CommitInfo, WebLinks},
-    progress::Progress,
-};
 use render::{FrameUpdate, SpriteInstance};
 
-use super::{BlameState, DiffSide, DiffState, DocumentCache, Session};
-use crate::git_worker::Revision;
+use super::{DocumentCache, Session};
+use crate::git::{
+    blame::session::BlameState,
+    diff::session::{DiffSide, DiffState},
+};
+use crate::{
+    document::{DocumentId, MapDocument, PrefabInstanceId},
+    environment::{Environment, progress::Progress},
+    git::{
+        blame::BlameResult,
+        diff::DiffSource,
+        repo::{CommitInfo, WebLinks},
+        worker::Revision,
+    },
+    testing,
+};
 
 /// Counts live heap bytes, so memory tests can measure what a structure holds by dropping it.
 struct CountingAllocator;
@@ -81,29 +86,29 @@ pub(crate) fn take_peak_bytes() -> usize {
 /// The editor always loads in the background, but tests want one blocking call.
 impl Session {
     pub(crate) fn load_environment(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        self.apply_codebase(crate::loader::load_codebase(
+        self.apply_codebase(crate::environment::worker::load_codebase(
             path,
-            &editor::environment::BakeOptions::default(),
+            &crate::environment::compile::BakeOptions::default(),
             &Progress::new(),
         )?);
 
         Ok(())
     }
 
-    pub(super) fn open_map(&mut self, path: &Path, z: u32) -> Result<(), Box<dyn std::error::Error>> {
-        self.apply_map(crate::loader::load_map(path, z, &Progress::new())?);
+    pub(crate) fn open_map(&mut self, path: &Path, z: u32) -> Result<(), Box<dyn std::error::Error>> {
+        self.apply_map(crate::environment::worker::load_map(path, z, &Progress::new())?);
 
         Ok(())
     }
 
-    pub(super) fn active_cache(&self) -> &DocumentCache {
+    pub(crate) fn active_cache(&self) -> &DocumentCache {
         self.state
             .active()
             .and_then(|id| self.caches.get(&id))
             .expect("a document is open")
     }
 
-    pub(super) fn revision(&self) -> u64 {
+    pub(crate) fn revision(&self) -> u64 {
         self.active_cache().revision
     }
 
@@ -119,7 +124,7 @@ impl Session {
         let mut positions = (1..=size.x)
             .flat_map(|x| (1..=size.y).flat_map(move |y| (1..=size.z).map(move |z| dmm::Coord::new(x, y, z))))
             .flat_map(|coord| grid.ids_at(coord).to_vec())
-            .filter(|id| id.get() >= editor::maploader::preview::PREVIEW_ID_START)
+            .filter(|id| id.get() >= crate::maploader::preview::PREVIEW_ID_START)
             .map(|id| (id.get(), bake.and_then(|bake| bake.position(id.get()))))
             .collect::<Vec<_>>();
         positions.sort_unstable_by_key(|(id, _)| *id);
@@ -127,29 +132,29 @@ impl Session {
         positions
     }
 
-    pub(super) fn frame_update(&self) -> Option<FrameUpdate> {
+    pub(crate) fn frame_update(&self) -> Option<FrameUpdate> {
         self.active_cache().frame_updates.last().cloned()
     }
 }
 
-pub(super) fn conflicted_session() -> Session {
+pub(crate) fn conflicted_session() -> Session {
     let floor = vec![Prefab::new(TreePath::parse("/turf/floor"))];
     let wall = vec![Prefab::new(TreePath::parse("/turf/wall"))];
     let mut map = Map::new(Size { x: 3, y: 1, z: 1 });
     let key = map.intern_tile(floor.clone());
     map.grid[0][0].fill(key);
     let mut session = Session::new();
-    session.apply_map(crate::loader::LoadedMap {
+    session.apply_map(crate::environment::worker::LoadedMap {
         path: PathBuf::from("conflicts.dmm"),
         map,
         z: 1,
         errors: Vec::new(),
-        repo: Some(editor::git::RepoPath {
+        repo: Some(crate::git::repo::RepoPath {
             root: PathBuf::from("missing-repository"),
             git_dir: PathBuf::from("missing-repository/.git"),
             rel: String::from("conflicts.dmm"),
         }),
-        conflict: Some(editor::conflict::ConflictData {
+        conflict: Some(crate::git::conflict::ConflictData {
             operation: None,
             conflicts: [1, 3]
                 .map(|x| dmm::merge::TileConflict {
@@ -199,13 +204,13 @@ pub(crate) fn install_blame(session: &mut Session, id: DocumentId, result: Blame
     git.web = WebLinks::from_remote("https://github.com/example/maps.git");
 }
 
-pub(super) fn examples() -> PathBuf {
+pub(crate) fn examples() -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/env");
 
     path.canonicalize().unwrap_or(path)
 }
 
-pub(super) fn node_environment() -> Environment {
+pub(crate) fn node_environment() -> Environment {
     const PROFILE: &str = r#"
 /obj/cable
 /obj/cable/heavy
@@ -255,40 +260,8 @@ pub(super) fn layered_node_environment() -> Environment {
     node_environment_with_profile(include_str!("../../tests/fixtures/programs/layered_node_profile.dm"))
 }
 
-pub(super) fn node_environment_with_profile(profile: &'static str) -> Environment {
-    let root = examples();
-    let compile = |baking| {
-        let arena = StrArena::new();
-        let prelude = preprocessor::prelude_files()
-            .into_iter()
-            .chain([preprocessor::PreludeFile::Embedded("<test-node-profile.dm>", profile)]);
-        let preprocessed = preprocessor::Preprocessor::new(&arena)
-            .with_prelude(prelude)
-            .with_baking(baking)
-            .run(root.join("test.dm"))
-            .expect("preprocess");
-        assert!(preprocessed.is_ok(), "{:?}", preprocessed.errors);
-
-        let ast = ast::parse(&preprocessed.tokens).expect("parse");
-        let (tree, errors) = sema::analyze(&ast);
-        assert!(errors.is_empty(), "{errors:?}");
-        let (module, _) = ir::lower(&ast, &tree, baking);
-
-        (tree, module)
-    };
-    let (editor_tree, _) = compile(false);
-    let (bake_tree, module) = compile(true);
-    let profile = vm::bake::profile_type(&bake_tree).expect("default profile");
-    let mut environment = Environment::new(root.join("test.dme"), editor_tree);
-    environment.bake_program = Some(BakeProgram {
-        tree: bake_tree,
-        module: codegen::generate(&module).expect("codegen"),
-        profile,
-        files: Default::default(),
-        icon_states: Default::default(),
-    });
-
-    environment
+pub(crate) fn node_environment_with_profile(profile: &'static str) -> Environment {
+    testing::compile_environment(&[("<test-node-profile.dm>", profile)])
 }
 
 /// One floor tile whose profile faults in `bake()` and `ui()`
@@ -313,7 +286,7 @@ pub(crate) fn highlight_toggle_fault_session() -> (Session, DocumentId) {
 fn profile_session(profile: &'static str) -> (Session, DocumentId) {
     let environment = node_environment_with_profile(profile);
     let document = MapDocument::new(node_map(1, 1, &[]), 1);
-    let bake = editor::bake::build(&environment, &document).expect("the profile bakes");
+    let bake = crate::bake::build(&environment, &document).expect("the profile bakes");
     let mut session = Session::new();
     session.state.environment = Some(Arc::new(environment));
     let id = session.state.open_document(document);
@@ -360,11 +333,11 @@ pub(crate) fn node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId)
     node_session_with_environment(map, seed, node_environment(), "/obj/cable")
 }
 
-pub(super) fn oriented_node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId) {
+pub(crate) fn oriented_node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId) {
     node_session_with_environment(map, seed, oriented_node_environment(), "/obj/link/segment")
 }
 
-pub(super) fn layered_node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId) {
+pub(crate) fn layered_node_session(map: Map, seed: Coord) -> (Session, PrefabInstanceId) {
     node_session_with_environment(map, seed, layered_node_environment(), "/obj/pipe/layer2")
 }
 
@@ -382,7 +355,7 @@ pub(super) fn node_session_with_environment(
                 .is_some_and(|instance| instance.prefab().path.to_string().starts_with(target_path))
         })
         .expect("seed node");
-    let bake = editor::bake::build(&environment, &document).expect("node profile bakes");
+    let bake = crate::bake::build(&environment, &document).expect("node profile bakes");
     let mut session = Session::new();
     session.state.environment = Some(Arc::new(environment));
     let document_id = session.state.open_document(document);
@@ -398,7 +371,7 @@ pub(super) fn node_session_with_environment(
     (session, target)
 }
 
-pub(super) fn oriented_node_map(width: u32, height: u32, placements: &[(Coord, &str, u32)]) -> Map {
+pub(crate) fn oriented_node_map(width: u32, height: u32, placements: &[(Coord, &str, u32)]) -> Map {
     let mut map = Map::new(Size {
         x: width,
         y: height,
@@ -423,7 +396,7 @@ pub(super) fn oriented_node_map(width: u32, height: u32, placements: &[(Coord, &
     map
 }
 
-pub(super) fn oriented_dir(session: &Session, coord: Coord) -> Option<u32> {
+pub(crate) fn oriented_dir(session: &Session, coord: Coord) -> Option<u32> {
     session.map()?.tile_at(coord)?.iter().find_map(|prefab| {
         prefab.path.to_string().starts_with("/obj/link/segment").then(|| {
             prefab
@@ -443,11 +416,11 @@ pub(crate) fn node_tile_has_group(session: &Session, coord: Coord) -> bool {
     })
 }
 
-pub(super) fn area_at(session: &Session, coord: Coord) -> Option<PrefabInstanceId> {
+pub(crate) fn area_at(session: &Session, coord: Coord) -> Option<PrefabInstanceId> {
     session.area_at(session.state.active()?, coord)
 }
 
-pub(super) fn focus_session() -> Session {
+pub(crate) fn focus_session() -> Session {
     let root = examples();
     let mut session = Session::new();
     session.load_environment(&root.join("test.dme")).unwrap();
@@ -470,7 +443,7 @@ pub(super) fn focus_session() -> Session {
     session
 }
 
-pub(super) fn flat_session(width: u32, height: u32) -> Session {
+pub(crate) fn flat_session(width: u32, height: u32) -> Session {
     let mut session = focus_session();
     let mut map = Map::new(Size {
         x: width,
@@ -503,7 +476,7 @@ pub(crate) fn unknown_paths_session() -> Session {
     map.intern_tile(vec![Prefab::new(TreePath::parse("/obj/unused_type"))]);
     map.grid[0][0] = vec![a, b];
     map.grid[1][0] = vec![b, a];
-    session.apply_map(crate::loader::LoadedMap {
+    session.apply_map(crate::environment::worker::LoadedMap {
         path: PathBuf::from("unknown-paths.dmm"),
         map,
         z: 1,
@@ -528,7 +501,7 @@ pub(super) fn assert_same_sprites(actual: &[SpriteInstance], expected: &[SpriteI
 }
 
 /// Waits for the background bake, since a worker thread has no deterministic finish time.
-pub(super) fn settle_bake(session: &mut Session) {
+pub(crate) fn settle_bake(session: &mut Session) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
 
     while session.baker.is_busy() && std::time::Instant::now() < deadline {
@@ -537,28 +510,20 @@ pub(super) fn settle_bake(session: &mut Session) {
     }
 }
 
-pub(crate) fn module_viewport_session() -> Result<(impl Sized, Session), Box<dyn std::error::Error>> {
-    super::modules::tests::viewport_session()
-}
-
-pub(crate) fn coordinate_viewport_session() -> Result<(impl Sized, Session), Box<dyn std::error::Error>> {
-    super::modules::tests::coordinate_viewport_session()
-}
-
-pub(super) fn assert_render_cache_matches_rebuild(session: &Session) {
+pub(crate) fn assert_render_cache_matches_rebuild(session: &Session) {
     let environment = session.state.environment.as_ref().unwrap();
     let document_id = session.state.active().unwrap();
-    let expected = editor::frame::build_view_with_options(
+    let expected = crate::frame::build_view_with_options(
         &environment.tree,
         &environment.icons,
         &session.textures,
         session.effective_grid(document_id).unwrap(),
-        editor::frame::FrameRenderOptions {
+        crate::frame::options::FrameRenderOptions {
             perspective: environment.world.perspective,
             node_types: Some(&session.active_cache().node_types),
             visibility: &session.type_visibility,
             tile_size: session.options.tile_size,
-            appearances: editor::bake::appearances(session.active_cache().bake.as_ref()),
+            appearances: crate::bake::appearances(session.active_cache().bake.as_ref()),
             lighting: session
                 .active_cache()
                 .bake

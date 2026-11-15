@@ -9,7 +9,7 @@ use super::{
     ComposeContext, MapView, ModuleChoices, ModuleOverlay, ModuleRootKey, PreviewIdAllocator, compose::update,
 };
 use crate::{
-    grid::Grid,
+    document::grid::Grid,
     maploader::{ModuleFiles, OpenModule, RootSpecs},
 };
 
@@ -191,11 +191,5 @@ impl ModulePreviewState {
         self.enabled = enabled;
 
         ModuleOverlay::changes(source, self.preview.as_ref(), None)
-    }
-
-    pub fn apply_choices(&mut self, ctx: ComposeContext<'_>, choices: ModuleChoices) -> Vec<PrefabInstanceId> {
-        self.choices = choices;
-
-        self.compose(ctx, &HashSet::new())
     }
 }

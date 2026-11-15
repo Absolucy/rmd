@@ -1,0 +1,21 @@
+[package]
+name = "ui"
+version = "0.1.0"
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dear-imgui-rs = { workspace = true, features = ["serde"] }
+dear-imgui-winit.workspace = true
+fontdb = "0.24.0"
+log.workspace = true
+raw-window-handle.workspace = true
+render.workspace = true
+serde = { workspace = true, features = ["derive"] }
+toml.workspace = true
+winit.workspace = true
+
+[lints]
+workspace = true

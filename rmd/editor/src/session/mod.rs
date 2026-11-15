@@ -6,69 +6,32 @@ use std::{
 };
 
 use dmm::Prefab;
-use editor::{
-    EditorState,
-    document::{DocumentId, PrefabInstanceId},
-    frame::{FrameInstances, FrameOptions, TypeVisibility},
-    maploader::preview::ModulePreviewState,
-    visual,
-};
 use objtree::TypeId;
 use render::{FrameUpdate, texture::TextureCatalog};
 
-use crate::{baker::Baker, git_worker::GitWorker};
+use crate::{
+    bake::worker::Baker,
+    coop::Coop,
+    document::{DocumentId, PrefabInstanceId, state::EditorState},
+    frame::{
+        FrameInstances,
+        options::{FrameOptions, TypeVisibility},
+        visual,
+    },
+    git::{session::GitDocState, worker::GitWorker},
+    inspector::session::IdenticalCache,
+    maploader::preview::ModulePreviewState,
+    node::session::NodeEditState,
+    palette::session::PrefabThumbnail,
+    region::session::RegionState,
+    viewport::{highlight, preview::RegionPreviewCache},
+};
 
-mod bake;
-mod blame;
-mod clipboard;
-mod codebase;
-mod coop;
-mod diff;
-mod direction;
-mod document;
-mod edit;
 #[cfg(test)]
 pub(crate) mod fixtures;
-mod focus;
-mod frame;
-mod git;
-mod guides;
-mod highlight;
-mod instance;
-mod issues;
-mod level;
-mod modules;
-mod node;
-mod palette;
-mod panel;
-mod preview;
-mod region;
-mod search;
-
-use self::{
-    bake::report_bake_output, diff::DiffState, direction::direction_state, edit::is_reorder_label,
-    highlight::always_highlighted, node::NodeEditState, preview::RegionPreviewCache, region::RegionState,
-};
-pub(crate) use self::{
-    bake::{FaultState, RuntimeFault},
-    blame::{BlameState, blame_color},
-    codebase::{DiagnosticSeverity, LoadReport, MAX_REPORTED_DIAGNOSTICS, build_textures, discover_maps},
-    coop::{Activity, Coop, CoopStatus, SharedState},
-    diff::DiffSide,
-    direction::{DirectionState, DirectionalTypes},
-    edit::context_placement_group,
-    frame::TypeLayer,
-    git::GitDocState,
-    guides::GuideBadge,
-    instance::{EditScope, GizmoMember, PickedTransform},
-    level::validate_level,
-    node::NodeOverlay,
-    palette::{PrefabThumbnail, prefab_thumbnail_for, prefab_thumbnail_or_missing},
-    preview::{PlacementPreview, RegionPreviewSource},
-};
 
 #[derive(Default)]
-enum BakeHold {
+pub(crate) enum BakeHold {
     /// Every edit bakes RIGHT NOW
     #[default]
     Off,
@@ -79,61 +42,61 @@ enum BakeHold {
 }
 
 #[derive(Default)]
-struct DocumentCache {
-    modules: ModulePreviewState,
-    node_types: HashSet<TypeId>,
-    instances: FrameInstances,
-    revision: u64,
-    frame_updates: Vec<FrameUpdate>,
-    lighting_revision: u64,
-    lighting_updates: Vec<render::LightingUpdate>,
-    preview: Option<RegionPreviewCache>,
-    bake: Option<editor::bake::Bake>,
-    bake_hold: BakeHold,
+pub(crate) struct DocumentCache {
+    pub(crate) modules: ModulePreviewState,
+    pub(crate) node_types: HashSet<TypeId>,
+    pub(crate) instances: FrameInstances,
+    pub(crate) revision: u64,
+    pub(crate) frame_updates: Vec<FrameUpdate>,
+    pub(crate) lighting_revision: u64,
+    pub(crate) lighting_updates: Vec<render::LightingUpdate>,
+    pub(crate) preview: Option<RegionPreviewCache>,
+    pub(crate) bake: Option<crate::bake::Bake>,
+    pub(crate) bake_hold: BakeHold,
     // edited while the bake was off growing by a level, replayed when it comes back
-    unbaked: Vec<PrefabInstanceId>,
-    always_highlights: Vec<PrefabInstanceId>,
-    unknown_highlights: RefCell<highlight::UnknownHighlights>,
-    issues: RefCell<issues::IssueGroups>,
+    pub(crate) unbaked: Vec<PrefabInstanceId>,
+    pub(crate) always_highlights: Vec<PrefabInstanceId>,
+    pub(crate) unknown_highlights: RefCell<highlight::UnknownHighlights>,
+    pub(crate) issues: RefCell<crate::issues::session::IssueGroups>,
     /// What a replayed panel frame asked this document to re-derive, held until it is active.
-    pending_rebake: editor::bake::UiRebake,
-    git: Option<GitDocState>,
-    map_revision: u64,
-    runtimes: Vec<bake::LoggedFault>,
+    pub(crate) pending_rebake: crate::bake::UiRebake,
+    pub(crate) git: Option<GitDocState>,
+    pub(crate) map_revision: u64,
+    pub(crate) runtimes: Vec<crate::bake::session::LoggedFault>,
 }
 
-type SharedHighlights = Arc<[editor::bake::Highlight]>;
+pub(crate) type SharedHighlights = Arc<[crate::bake::Highlight]>;
 
 pub struct Session {
     pub state: EditorState,
     pub textures: TextureCatalog,
     pub options: FrameOptions,
-    pub diagnostics: editor::environment::LoadDiagnostics,
-    caches: HashMap<DocumentId, DocumentCache>,
-    next_revision: u64,
-    next_preview_revision: u64,
-    type_visibility: TypeVisibility,
-    type_thumbnails: HashMap<TypeId, Option<PrefabThumbnail>>,
-    texture_revision: u64,
-    maps: Vec<PathBuf>,
-    baker: Baker,
-    git_worker: GitWorker,
-    git_enabled: bool,
-    sanitize_vars_on_save: bool,
+    pub diagnostics: crate::environment::LoadDiagnostics,
+    pub(crate) caches: HashMap<DocumentId, DocumentCache>,
+    pub(crate) next_revision: u64,
+    pub(crate) next_preview_revision: u64,
+    pub(crate) type_visibility: TypeVisibility,
+    pub(crate) type_thumbnails: HashMap<TypeId, Option<PrefabThumbnail>>,
+    pub(crate) texture_revision: u64,
+    pub(crate) maps: Vec<PathBuf>,
+    pub(crate) baker: Baker,
+    pub(crate) git_worker: GitWorker,
+    pub(crate) git_enabled: bool,
+    pub(crate) sanitize_vars_on_save: bool,
     /// A map whose merge conflicts were just loaded, for the UI to surface
-    loaded_conflicts: Option<DocumentId>,
-    loaded_issues: Option<DocumentId>,
-    queued_bakes: Vec<DocumentId>,
-    standalone_baker: editor::bake::Standalone,
-    standalone: Vec<(Prefab, Option<visual::Appearance>)>,
-    logged_faults: HashSet<vm::FaultKey>,
-    logged_ui_fault: Option<vm::FaultKey>,
+    pub(crate) loaded_conflicts: Option<DocumentId>,
+    pub(crate) loaded_issues: Option<DocumentId>,
+    pub(crate) queued_bakes: Vec<DocumentId>,
+    pub(crate) standalone_baker: crate::bake::Standalone,
+    pub(crate) standalone: Vec<(Prefab, Option<visual::Appearance>)>,
+    pub(crate) logged_faults: HashSet<vm::FaultKey>,
+    pub(crate) logged_ui_fault: Option<vm::FaultKey>,
     /// The last interaction the panel committed, replayed into a bake that lands after it.
-    ui_feedback: Option<editor::bake::UiFeedback>,
-    node_edit: Option<NodeEditState>,
-    identical: Option<instance::IdenticalCache>,
-    coop: Option<Coop>,
-    region_state: RegionState,
+    pub(crate) ui_feedback: Option<crate::bake::UiFeedback>,
+    pub(crate) node_edit: Option<NodeEditState>,
+    pub(crate) identical: Option<IdenticalCache>,
+    pub(crate) coop: Option<Coop>,
+    pub(crate) region_state: RegionState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,7 +119,7 @@ impl Session {
             state: EditorState::new(),
             textures: TextureCatalog::default(),
             options: FrameOptions::default(),
-            diagnostics: editor::environment::LoadDiagnostics::default(),
+            diagnostics: crate::environment::LoadDiagnostics::default(),
             caches: HashMap::new(),
             next_revision: 1,
             next_preview_revision: 1,
@@ -171,7 +134,7 @@ impl Session {
             loaded_conflicts: None,
             loaded_issues: None,
             queued_bakes: Vec::new(),
-            standalone_baker: editor::bake::Standalone::default(),
+            standalone_baker: crate::bake::Standalone::default(),
             standalone: Vec::new(),
             logged_faults: HashSet::new(),
             logged_ui_fault: None,

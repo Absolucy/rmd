@@ -2,10 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use dmm::{Coord, Prefab, PrefabInstanceId, Size, Tile};
 
-use crate::{
-    document::{PrefabInstance, PrefabLocation},
-    grid::Grid,
-};
+use crate::document::{grid::Grid, instance::PrefabInstance, instance::PrefabLocation};
 
 #[derive(Debug, Default, Clone)]
 pub(super) struct OverlayTiles {
@@ -97,6 +94,7 @@ impl<'a> MapView<'a> {
         Some(PrefabInstance::new(id, prefab, location))
     }
 
+    #[cfg(test)]
     pub fn prefab_instances(self) -> impl Iterator<Item = PrefabInstance<'a>> {
         self.source
             .prefab_instances()

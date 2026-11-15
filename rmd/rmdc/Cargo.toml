@@ -1,0 +1,24 @@
+[package]
+name = "rmdc"
+version = "1.7.5"
+edition.workspace = true
+
+[[bin]]
+name = "rmdc"
+path = "src/main.rs"
+
+[dependencies]
+base.workspace = true
+lexer.workspace = true
+preprocessor.workspace = true
+ast.workspace = true
+sema.workspace = true
+objtree.workspace = true
+dmm.workspace = true
+dmi.workspace = true
+ir.workspace = true
+codegen.workspace = true
+vm.workspace = true
+
+[lints]
+workspace = true

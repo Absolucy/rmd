@@ -1,4 +1,4 @@
-use core::file_path;
+use base::file_path;
 use std::{
     array,
     cmp::Reverse,
@@ -16,7 +16,7 @@ use super::{
     ModuleVariantPreview, PREVIEW_ID_START, PreviewIdAllocator,
 };
 use crate::{
-    grid::Grid,
+    document::grid::Grid,
     maploader::{
         Diagnostic, ErrorKind, LoadedModule, MAX_NESTING, ModuleFiles, RootSpecs, module::Anchor, resolve_module_path,
         resolved_path,
@@ -46,6 +46,7 @@ pub(super) struct ModuleLayer {
     clipped: usize,
 }
 
+#[cfg(test)]
 pub fn compose(
     ctx: ComposeContext<'_>, specs: &RootSpecs, files: &mut ModuleFiles, choices: &ModuleChoices,
     ids: &mut PreviewIdAllocator,
@@ -235,6 +236,7 @@ impl ModuleComposer<'_> {
                 };
                 self.preview.diagnostics.push(diagnostic.clone());
                 self.preview.roots.push(ModuleRootPreview {
+                    #[cfg(test)]
                     depth: key.ancestry.len(),
                     key,
                     coord,
@@ -288,6 +290,7 @@ impl ModuleComposer<'_> {
         self.preview.roots.push(ModuleRootPreview {
             key: key.clone(),
             coord,
+            #[cfg(test)]
             depth: key.ancestry.len(),
             marker: prefab,
             variants: variants.clone(),
